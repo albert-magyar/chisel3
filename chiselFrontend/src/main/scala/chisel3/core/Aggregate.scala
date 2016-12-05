@@ -371,7 +371,7 @@ abstract class Record extends Aggregate {
   * members variables of [[Data]] subtypes to be elements in the Bundle.
   */
 class Bundle extends Record {
-  final override def className = "Bundle"
+  override def className = "Bundle"
 
   final lazy val elements: ListMap[String, Data] = {
     val nameMap = LinkedHashMap[String, Data]()
