@@ -320,13 +320,14 @@ trait VecLike[T <: Data] extends collection.IndexedSeq[T] with HasId {
     SeqUtils.oneHotMux(indexWhereHelper(p))
 }
 
-/** Base class for Aggregates based on pairs of (String, Data)
+/** Base class for Aggregates based on key values pairs of String and Data
   *
-  * Only used to share implementation code, not exposed as part of API
+  * Record should only be extended by libraries and fairly sophisticated generators.
+  * RTL writers should use [[Bundle]].
   */
 abstract class Record extends Aggregate {
 
-  def elements: ListMap[String, Data]
+  val elements: ListMap[String, Data]
 
   /** Name for Pretty Printing */
   def className: String = this.getClass.getSimpleName

@@ -6,28 +6,28 @@ import chisel3._
 
 class BundleSpec extends ChiselFlatSpec {
   class BundleFooBar extends Bundle {
-    val foo = UInt.width(32)
-    val bar = UInt.width(32)
+    val foo = UInt(32.W)
+    val bar = UInt(32.W)
     override def cloneType = (new BundleFooBar).asInstanceOf[this.type]
   }
   class BundleBarFoo extends Bundle {
-    val bar = UInt.width(32)
-    val foo = UInt.width(32)
+    val bar = UInt(32.W)
+    val foo = UInt(32.W)
     override def cloneType = (new BundleBarFoo).asInstanceOf[this.type]
   }
   class BundleFoo extends Bundle {
-    val foo = UInt.width(32)
+    val foo = UInt(32.W)
     override def cloneType = (new BundleFoo).asInstanceOf[this.type]
   }
   class BundleBar extends Bundle {
-    val bar = UInt.width(32)
+    val bar = UInt(32.W)
     override def cloneType = (new BundleBar).asInstanceOf[this.type]
   }
 
   class MyModule(output: Bundle, input: Bundle) extends Module {
     val io = IO(new Bundle {
-      val in = Input(input.cloneType)
-      val out = Output(output.cloneType)
+      val in = Input(input)
+      val out = Output(output)
     })
     io.out <> io.in
   }
