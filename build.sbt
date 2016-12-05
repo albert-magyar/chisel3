@@ -19,7 +19,7 @@ lazy val commonSettings = Seq (
   git.remoteRepo := "git@github.com:ucb-bar/chisel3.git",
   autoAPIMappings := true,
   scalaVersion := "2.11.7",
-  scalacOptions := Seq("-deprecation")
+  scalacOptions := Seq("-deprecation", "-feature")
 )
 
 val defaultVersions = Map("firrtl" -> "1.1-SNAPSHOT")
@@ -98,15 +98,18 @@ lazy val chiselSettings = Seq (
 lazy val coreMacros = (project in file("coreMacros")).
   settings(commonSettings: _*).
   settings(
-    libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value
+    libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value,
+    publishArtifact := false
   )
 
 lazy val chiselFrontend = (project in file("chiselFrontend")).
   settings(commonSettings: _*).
   settings(
-    libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value
+    libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value,
+    publishArtifact := false
   ).
   dependsOn(coreMacros)
+
 
 lazy val chisel = (project in file(".")).
   enablePlugins(BuildInfoPlugin).
@@ -119,14 +122,17 @@ lazy val chisel = (project in file(".")).
   settings(commonSettings: _*).
   settings(customUnidocSettings: _*).
   settings(chiselSettings: _*).
-  dependsOn(coreMacros).
-  dependsOn(chiselFrontend).
+  // Prevent separate JARs from being generated for coreMacros and chiselFrontend.
+  dependsOn(coreMacros % "compile-internal;test-internal").
+  dependsOn(chiselFrontend % "compile-internal;test-internal").
   settings(
     aggregate in doc := false,
-    // Include macro classes, resources, and sources main jar.
+    // Include macro classes, resources, and sources main JAR.
     mappings in (Compile, packageBin) <++= mappings in (coreMacros, Compile, packageBin),
     mappings in (Compile, packageSrc) <++= mappings in (coreMacros, Compile, packageSrc),
     mappings in (Compile, packageBin) <++= mappings in (chiselFrontend, Compile, packageBin),
-    mappings in (Compile, packageSrc) <++= mappings in (chiselFrontend, Compile, packageSrc)
-  ).
-  aggregate(coreMacros, chiselFrontend)
+    mappings in (Compile, packageSrc) <++= mappings in (chiselFrontend, Compile, packageSrc),
+    // Export the packaged JAR so projects that depend directly on Chisel project (rather than the
+    // published artifact) also see the stuff in coreMacros and chiselFrontend.
+    exportJars := true
+  )
