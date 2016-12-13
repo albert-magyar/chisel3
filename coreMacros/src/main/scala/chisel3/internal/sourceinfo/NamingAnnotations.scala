@@ -17,16 +17,16 @@ import scala.language.experimental.macros
 import scala.annotation.StaticAnnotation
 import scala.annotation.compileTimeOnly
 
-object DebugTransforms {
+class DebugTransforms(val c: Context) {
+  import c.universe._
+
   /** Passthrough transform that prints the annottee for debugging purposes.
     * No guarantees are made on what this annotation does, and it may very well change over time.
     *
     * The print is warning level to make it visually easier to spot, as well as a reminder that
     * this annotation should not make it to production / committed code.
     */
-  def dump(c: Context)(annottees: c.Tree*): c.Tree = {
-    import c.universe._
-
+  def dump(annottees: c.Tree*): c.Tree = {
     val combined = annottees.map({ tree => show(tree) }).mkString("\r\n\r\n")
     annottees.foreach(tree => c.warning(c.enclosingPosition, s"Debug dump:\n$combined"))
     q"..$annottees"
@@ -38,9 +38,7 @@ object DebugTransforms {
     * The print is warning level to make it visually easier to spot, as well as a reminder that
     * this annotation should not make it to production / committed code.
     */
-  def treedump(c: Context)(annottees: c.Tree*): c.Tree = {
-    import c.universe._
-
+  def treedump(annottees: c.Tree*): c.Tree = {
     val combined = annottees.map({ tree => showRaw(tree) }).mkString("\r\n")
     annottees.foreach(tree => c.warning(c.enclosingPosition, s"Debug tree dump:\n$combined"))
     q"..$annottees"
@@ -81,21 +79,37 @@ class NamingTransforms(val c: Context) {
       case q"(..$params) => $expr" => tree
       case q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => tree
       case q"$mods trait $tpname[..$tparams] extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => tree
-      case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => tree // TODO insert blind transforms here
+      case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => {
+        val Modifiers(_, _, annotations) = mods
+        val containsChiselName = annotations.map({q"new chiselName()" equalsStructure _}).fold(false)({_||_})
+        if (containsChiselName) {
+          tree
+        } else {
+          super.transform(tree)
+        }
+      }
+      case other => super.transform(other)
+    }
+  }
+
+  /** Method-specific val name transform, handling the return case.
+    */
+  class MethodTransformer(val contextVar: TermName) extends ValNameTransformer {
+    override def transform(tree: Tree) = tree match {
+      // TODO: better error messages when returning nothing
+      case q"return $expr" => q"return $globalNamingStack.pop_return_context($expr, $contextVar)"
       case other => super.transform(other)
     }
   }
 
   /** Method-specific val name transform, containing logic to prevent from recursing into inner
-    * methods and applies the blind method transform on inner functions.
+    * methods.
     */
-  class MethodTransformer(val contextVar: TermName) extends ValNameTransformer {
+  class NonRecursiveMethodTransformer(contextVar: TermName) extends MethodTransformer(contextVar) {
     override def transform(tree: Tree) = tree match {
       // Do not recurse into functions and subclasses
       case q"(..$params) => $expr" => tree
       case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => tree
-      // TODO: better error messages when returning nothing
-      case q"return $expr" => q"return $globalNamingStack.pop_return_context($expr, $contextVar)"
       case other => super.transform(other)
     }
   }
@@ -120,7 +134,7 @@ class NamingTransforms(val c: Context) {
     */
   def transformHierarchicalMethod(expr: c.Tree) = {
     val contextVar = TermName(c.freshName("namingContext"))
-    val transformedBody = (new MethodTransformer(contextVar)).transform(expr)
+    val transformedBody = (new NonRecursiveMethodTransformer(contextVar)).transform(expr)
 
     q"""{
       val $contextVar = $globalNamingStack.push_context()
@@ -135,13 +149,15 @@ class NamingTransforms(val c: Context) {
     */
   def transformBlindMethod(expr: c.Tree) = {
     val contextVar = TermName(c.freshName("namingContext"))
+    val returnVar = TermName(c.freshName("returnVal"))
     val transformedBody = (new MethodTransformer(contextVar)).transform(expr)
 
     q"""{
       val $contextVar = $globalNamingStack.push_context()
-      ..$transformedBody
+      val $returnVar = $transformedBody
       $contextVar.name_prefix("")
       $globalNamingStack.pop_context($contextVar)
+      $returnVar
     }
     """
   }
@@ -189,8 +205,7 @@ class NamingTransforms(val c: Context) {
     q"..$transformed"
   }
 
-  /** Applies naming transforms to vals in the annotated content. Does not apply recursively to
-    * subclasses, sub-functions, etc.
+  /** Applies naming transforms to vals in the annotated method. Non-hierarchical, applies recursively.
     *
     * Basically rewrites all instances of:
     * val name = expr

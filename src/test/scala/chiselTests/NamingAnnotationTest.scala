@@ -3,7 +3,7 @@
 package chiselTests
 
 import chisel3._
-import chisel3.experimental.chiselName
+import chisel3.experimental.{chiselName, blindName, dump}
 import org.scalatest._
 import org.scalatest.prop._
 import chisel3.testers.BasicTester
@@ -54,11 +54,50 @@ class NamedModule extends NamedModuleTester {
     val myA = expectName(1.U + myNested, "test_myA")
     val myB = expectName(myA +& 2.U, "test_myB")
     val myC = expectName(myB +& 3.U, "test_myC")
-    myC +& 4.U  // obviously named at enclosing scope
+    myC +& 4.U  // named at enclosing scope
+  }
+
+  // implicit blind naming for module methods
+  def BlindDefault(): UInt = {
+    val blindA = expectName(1.U + 2.U, "blindA")
+    val blindB = expectName(blindA + 3.U, "blindB")
+    blindB + 2.U  // named at enclosing scope
   }
 
   val test = expectName(FunctionMockup(), "test")
   val test2 = expectName(test +& 2.U, "test2")
+  val test3 = expectName(BlindDefault(), "test3")
+}
+
+class BlindNamedFunction extends NamedModuleTester {
+  @blindName
+  def myInnerFunction(): UInt = {
+    def myInnerNested(): UInt = {
+      // Should automatically recurse into inner scope
+      val my1 = expectName(3.U + 4.U, "my1")
+      val my2 = expectName(my1 + 1.U, "my2")
+      my2 + 2.U  // named at enclosing scope
+    }
+
+    val myA = expectName(1.U + 2.U, "myA")
+    val myB = expectName(myA + myInnerNested(), "myB")
+    myB
+  }
+
+  val test = myInnerFunction()  // not named at this scope, since Module not annotated
+}
+
+@chiselName
+class NameCollisionModule extends NamedModuleTester {
+  // implicit blind naming for module methods
+  def repeatedCalls(id: Int): UInt = {
+    val test = expectName(1.U + 3.U, s"test_$id")  // should disambiguate by invocation order
+    test + 2.U
+  }
+
+  val test = expectName(1.U + 2.U, "test")
+  val a = repeatedCalls(1)
+  val b = repeatedCalls(2)
 }
 
 /** Ensure no crash happens if a named function is enclosed in a non-named module
@@ -100,6 +139,20 @@ class NamingAnnotationSpec extends ChiselPropSpec {
     // TODO: clean up test style
     var module: NamedModule = null
     elaborate { module = new NamedModule; module }
+    assert(module.getNameFailures() == Nil)
+  }
+
+  property("BlindNamedFunction should have names") {
+    // TODO: clean up test style
+    var module: BlindNamedFunction = null
+    elaborate { module = new BlindNamedFunction; module }
+    assert(module.getNameFailures() == Nil)
+  }
+
+  property("NameCollisionModule should disambiguate collisions") {
+    // TODO: clean up test style
+    var module: NameCollisionModule = null
+    elaborate { module = new NameCollisionModule; module }
     assert(module.getNameFailures() == Nil)
   }
 
