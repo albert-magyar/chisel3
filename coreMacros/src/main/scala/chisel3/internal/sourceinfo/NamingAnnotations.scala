@@ -17,7 +17,7 @@ import scala.language.experimental.macros
 import scala.annotation.StaticAnnotation
 import scala.annotation.compileTimeOnly
 
-object NamingTransforms {
+object DebugTransforms {
   /** Passthrough transform that prints the annottee for debugging purposes.
     * No guarantees are made on what this annotation does, and it may very well change over time.
     *
@@ -45,6 +45,149 @@ object NamingTransforms {
     annottees.foreach(tree => c.warning(c.enclosingPosition, s"Debug tree dump:\n$combined"))
     q"..$annottees"
   }
+}
+
+class NamingTransforms(val c: Context) {
+  import c.universe._
+  import Flag._
+
+  val globalNamingStack = q"_root_.chisel3.internal.DynamicNamingStack()"
+
+  /** Base transformer that provides the val name transform.
+    * Should not be instantiated, since by default this will recurse everywhere and break the
+    * naming context variable bounds.
+    */
+  trait ValNameTransformer extends Transformer {
+    val contextVar: TermName
+
+    override def transform(tree: Tree) = tree match {
+      // Intentionally not prefixed with $mods, since modifiers usually mean the val definition
+      // is in a non-transformable location, like as a parameter list.
+      // TODO: is this exhaustive / correct in all cases?
+      case q"val $tname: $tpt = $expr" => {
+        val TermName(tnameStr: String) = tname
+        val transformedExpr = super.transform(expr)
+        q"val $tname: $tpt = $contextVar.name($transformedExpr, $tnameStr)"
+      }
+      case other => super.transform(other)
+    }
+  }
+
+  /** Module-specific val name transform, containing logic to prevent from recursing into inner
+    * classes and applies the blind method transform on inner functions.
+    */
+  class ModuleTransformer(val contextVar: TermName) extends ValNameTransformer {
+    override def transform(tree: Tree) = tree match {
+      case q"(..$params) => $expr" => tree
+      case q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => tree
+      case q"$mods trait $tpname[..$tparams] extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => tree
+      case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => tree // TODO insert blind transforms here
+      case other => super.transform(other)
+    }
+  }
+
+  /** Method-specific val name transform, containing logic to prevent from recursing into inner
+    * methods and applies the blind method transform on inner functions.
+    */
+  class MethodTransformer(val contextVar: TermName) extends ValNameTransformer {
+    override def transform(tree: Tree) = tree match {
+      // Do not recurse into functions and subclasses
+      case q"(..$params) => $expr" => tree
+      case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => tree
+      // TODO: better error messages when returning nothing
+      case q"return $expr" => q"return $globalNamingStack.pop_return_context($expr, $contextVar)"
+      case other => super.transform(other)
+    }
+  }
+
+  /** Applies the val name transform to a module body. Pretty straightforward, since Module is
+    * the naming top level.
+    */
+  def transformModuleBody(stats: List[c.Tree]) = {
+    val contextVar = TermName(c.freshName("namingContext"))
+    val transformedBody = (new ModuleTransformer(contextVar)).transformTrees(stats)
+
+    q"""
+    val $contextVar = $globalNamingStack.push_context()
+    ..$transformedBody
+    $contextVar.name_prefix("")
+    $globalNamingStack.pop_context($contextVar)
+    """
+  }
+
+  /** Applies the val name transform to a method body, doing additional bookkeeping with the
+    * context to allow names to propagate and prefix through the function call stack.
+    */
+  def transformHierarchicalMethod(expr: c.Tree) = {
+    val contextVar = TermName(c.freshName("namingContext"))
+    val transformedBody = (new MethodTransformer(contextVar)).transform(expr)
+
+    q"""{
+      val $contextVar = $globalNamingStack.push_context()
+      $globalNamingStack.pop_return_context($transformedBody, $contextVar)
+    }
+    """
+  }
+
+
+  /** Applies the val name transform to a method body in a blind manner, applying no prefix to val
+    * names that are directly dropped into the top-level Module.
+    */
+  def transformBlindMethod(expr: c.Tree) = {
+    val contextVar = TermName(c.freshName("namingContext"))
+    val transformedBody = (new MethodTransformer(contextVar)).transform(expr)
+
+    q"""{
+      val $contextVar = $globalNamingStack.push_context()
+      ..$transformedBody
+      $contextVar.name_prefix("")
+      $globalNamingStack.pop_context($contextVar)
+    }
+    """
+  }
+
+  /** Applies naming transforms to vals in the annotated module or method.
+    *
+    * For methods, a hierarchical naming transform is used, where it will try to give objects names
+    * based on the call stack, assuming all functions on the stack are annotated as such and return
+    * a non-AnyVal object. Does not recurse into inner functions.
+    *
+    * For modules, this serves as the root of the call stack hierarchy for naming purposes. Methods
+    * which are not otherwise annotated will have the blindName annotation applied by default, on
+    * the assumption that they are one-shot utilities. Does not recurse into inner classes.
+    *
+    * Basically rewrites all instances of:
+    * val name = expr
+    * to:
+    * val name = context.name(expr, name)
+    */
+  def chiselName(annottees: c.Tree*): c.Tree = {
+    var namedElts: Int = 0
+
+    val transformed = annottees.map(annottee => annottee match {
+      case q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => {
+        val transformedStats = transformModuleBody(stats)
+        namedElts += 1
+        q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$transformedStats }"
+      }
+      case q"$mods object $tname extends { ..$earlydefns } with ..$parents { $self => ..$body }" => {
+        annottee // Don't fail noisly when a companion object is passed in with the actual class def
+      }
+      // Currently disallow on traits, this won't work well with inheritance.
+      case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => {
+        val transformedExpr = transformHierarchicalMethod(expr)
+        namedElts += 1
+        q"$mods def $tname[..$tparams](...$paramss): $tpt = $transformedExpr"
+      }
+      case other => c.abort(c.enclosingPosition, s"@chiselName annotion may only be used on classes and methods, got ${showCode(other)}")
+    })
+
+    if (namedElts != 1) {
+      c.abort(c.enclosingPosition, s"@chiselName annotation did not match exactly one valid tree, got:\r\n${annottees.map(tree => showCode(tree)).mkString("\r\n\r\n")}")
+    }
+
+    q"..$transformed"
+  }
 
   /** Applies naming transforms to vals in the annotated content. Does not apply recursively to
     * subclasses, sub-functions, etc.
@@ -54,104 +197,21 @@ object NamingTransforms {
     * to:
     * val name = context.name(expr, name)
     */
-  def chiselName(c: Context)(annottees: c.Tree*): c.Tree = {
-    import c.universe._
-    import Flag._
-    val globalNamingStack = q"_root_.chisel3.internal.DynamicNamingStack()"
-
+  def blindName(annottees: c.Tree*): c.Tree = {
     var namedElts: Int = 0
 
-    /** Applies the val name transform to a module body. Pretty straightforward, since Module is
-      * the naming top level.
-      */
-    def transformModuleBody(stats: List[c.Tree]) = {
-      val contextVar = TermName(c.freshName("namingContext"))
-
-      val valNameTransform = new Transformer {
-        override def transform(tree: Tree) = tree match {
-          // Intentionally not prefixed with $mods, since modifiers usually mean the val definition
-          // is in a non-transformable location, like as a parameter list.
-          // TODO: is this exhaustive / correct in all cases?
-          case q"val $tname: $tpt = $expr" => {
-            val TermName(tnameStr: String) = tname
-            val transformedExpr = super.transform(expr)
-            q"val $tname: $tpt = $contextVar.name($transformedExpr, $tnameStr)"
-          }
-          // Do not recurse into functions and subclasses
-          case q"(..$params) => $expr" => tree
-          case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" =>	tree
-          case q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => tree
-          case q"$mods trait $tpname[..$tparams] extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => tree
-          case other => super.transform(other)
-        }
-      }
-
-      val transformedBody = valNameTransform.transformTrees(stats)
-      q"""
-      val $contextVar = $globalNamingStack.push_context()
-      ..$transformedBody
-      $contextVar.name_prefix("")
-      $globalNamingStack.pop_context($contextVar)
-      """
-    }
-
-    /** Applies the val name transform to a method body.
-      * Does additional bookkeeping with the context to allow names to propagate and prefix through
-      * the function call stack.
-      */
-    def transformMethodExpr(expr: c.Tree) = {
-      val contextVar = TermName(c.freshName("namingContext"))
-
-      val valNameTransform = new Transformer {
-        override def transform(tree: Tree) = tree match {
-          // Intentionally not prefixed with $mods, since modifiers usually mean the val definition
-          // is in a non-transformable location, like as a parameter list.
-          // TODO: is this exhaustive / correct in all cases?
-          case q"val $tname: $tpt = $expr" => {
-            val TermName(tnameStr: String) = tname
-            val transformedExpr = super.transform(expr)
-            q"val $tname: $tpt = $contextVar.name($transformedExpr, $tnameStr)"
-          }
-          // Do not recurse into functions and subclasses
-          case q"(..$params) => $expr" => tree
-          case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => tree
-          // TODO: better error messages when returning nothing,
-          case q"return $expr" => q"return $globalNamingStack.pop_return_context($expr, $contextVar)"
-          case other => super.transform(other)
-        }
-      }
-
-      val transformedBody = valNameTransform.transform(expr)
-      q"""
-      {
-        val $contextVar = $globalNamingStack.push_context()
-        $globalNamingStack.pop_return_context($transformedBody, $contextVar)
-      }
-      """
-    }
-
     val transformed = annottees.map(_ match {
-      case q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$stats }" => {
-        val transformedStats = transformModuleBody(stats)
-        namedElts += 1
-        q"$mods class $tpname[..$tparams] $ctorMods(...$paramss) extends { ..$earlydefns } with ..$parents { $self => ..$transformedStats }"
-      }
-      case q"$mods object $tname extends { ..$earlydefns } with ..$parents { $self => ..$body }" => {
-        // Don't fail noisly when a companion object is passed in with the actual class def
-        q"$mods object $tname extends { ..$earlydefns } with ..$parents { $self => ..$body }"
-      }
       // Currently disallow on traits, this won't work well with inheritance.
       case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => {
-        val transformedExpr = transformMethodExpr(expr)
+        val transformedExpr = transformBlindMethod(expr)
         namedElts += 1
         q"$mods def $tname[..$tparams](...$paramss): $tpt = $transformedExpr"
       }
-      case other => c.abort(c.enclosingPosition, s"@module annotion may only be used on classes and methods, got ${showCode(other)}")
+      case other => c.abort(c.enclosingPosition, s"@blindName annotion may only be used on methods, got ${showCode(other)}")
     })
 
     if (namedElts != 1) {
-      // Double check that something was actually transformed
-      c.abort(c.enclosingPosition, s"@chiselName annotation did not match exactly one valid tree, got:\r\n${annottees.map(tree => showCode(tree)).mkString("\r\n\r\n")}")
+      c.abort(c.enclosingPosition, s"@blindName annotation did not match exactly one valid tree, got:\r\n${annottees.map(tree => showCode(tree)).mkString("\r\n\r\n")}")
     }
 
     q"..$transformed"

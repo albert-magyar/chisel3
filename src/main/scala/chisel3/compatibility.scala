@@ -348,15 +348,19 @@ package object Chisel {     // scalastyle:ignore package.object.name
 
     @compileTimeOnly("enable macro paradise to expand macro annotations")
     class dump extends StaticAnnotation {
-      def macroTransform(annottees: Any*): Any = macro chisel3.internal.naming.NamingTransforms.dump
+      def macroTransform(annottees: Any*): Any = macro chisel3.internal.naming.DebugTransforms.dump
     }
     @compileTimeOnly("enable macro paradise to expand macro annotations")
     class treedump extends StaticAnnotation {
-      def macroTransform(annottees: Any*): Any = macro chisel3.internal.naming.NamingTransforms.treedump
+      def macroTransform(annottees: Any*): Any = macro chisel3.internal.naming.DebugTransforms.treedump
     }
     @compileTimeOnly("enable macro paradise to expand macro annotations")
     class chiselName extends StaticAnnotation {
       def macroTransform(annottees: Any*): Any = macro chisel3.internal.naming.NamingTransforms.chiselName
+    }
+    @compileTimeOnly("enable macro paradise to expand macro annotations")
+    class blindName extends StaticAnnotation {
+      def macroTransform(annottees: Any*): Any = macro chisel3.internal.naming.NamingTransforms.blindName
     }
   }
 }

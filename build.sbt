@@ -21,7 +21,7 @@ lazy val commonSettings = Seq (
   git.remoteRepo := "git@github.com:ucb-bar/chisel3.git",
   autoAPIMappings := true,
   scalaVersion := "2.11.7",
-  scalacOptions := Seq("-deprecation", "-feature"),
+  scalacOptions := Seq("-deprecation", "-feature", "-language:reflectiveCalls"),
   libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value,
   addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full),
   // Since we want to examine the classpath to determine if a dependency on firrtl is required,
