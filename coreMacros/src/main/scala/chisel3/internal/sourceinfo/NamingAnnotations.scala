@@ -72,7 +72,7 @@ class NamingTransforms(val c: Context) {
   }
 
   /** Module-specific val name transform, containing logic to prevent from recursing into inner
-    * classes and applies the blind method transform on inner functions.
+    * classes and applies the local name method transform on inner functions.
     */
   class ModuleTransformer(val contextVar: TermName) extends ValNameTransformer {
     override def transform(tree: Tree) = tree match {
@@ -144,10 +144,10 @@ class NamingTransforms(val c: Context) {
   }
 
 
-  /** Applies the val name transform to a method body in a blind manner, applying no prefix to val
+  /** Applies the val name transform to a method body in a local manner, applying no prefix to val
     * names that are directly dropped into the top-level Module.
     */
-  def transformBlindMethod(expr: c.Tree) = {
+  def transformLocalMethod(expr: c.Tree) = {
     val contextVar = TermName(c.freshName("namingContext"))
     val returnVar = TermName(c.freshName("returnVal"))
     val transformedBody = (new MethodTransformer(contextVar)).transform(expr)
@@ -169,7 +169,7 @@ class NamingTransforms(val c: Context) {
     * a non-AnyVal object. Does not recurse into inner functions.
     *
     * For modules, this serves as the root of the call stack hierarchy for naming purposes. Methods
-    * which are not otherwise annotated will have the blindName annotation applied by default, on
+    * which are not otherwise annotated will have the localName annotation applied by default, on
     * the assumption that they are one-shot utilities. Does not recurse into inner classes.
     *
     * Basically rewrites all instances of:
@@ -212,21 +212,21 @@ class NamingTransforms(val c: Context) {
     * to:
     * val name = context.name(expr, name)
     */
-  def blindName(annottees: c.Tree*): c.Tree = {
+  def localName(annottees: c.Tree*): c.Tree = {
     var namedElts: Int = 0
 
     val transformed = annottees.map(_ match {
       // Currently disallow on traits, this won't work well with inheritance.
       case q"$mods def $tname[..$tparams](...$paramss): $tpt = $expr" => {
-        val transformedExpr = transformBlindMethod(expr)
+        val transformedExpr = transformLocalMethod(expr)
         namedElts += 1
         q"$mods def $tname[..$tparams](...$paramss): $tpt = $transformedExpr"
       }
-      case other => c.abort(c.enclosingPosition, s"@blindName annotion may only be used on methods, got ${showCode(other)}")
+      case other => c.abort(c.enclosingPosition, s"@localName annotion may only be used on methods, got ${showCode(other)}")
     })
 
     if (namedElts != 1) {
-      c.abort(c.enclosingPosition, s"@blindName annotation did not match exactly one valid tree, got:\r\n${annottees.map(tree => showCode(tree)).mkString("\r\n\r\n")}")
+      c.abort(c.enclosingPosition, s"@localName annotation did not match exactly one valid tree, got:\r\n${annottees.map(tree => showCode(tree)).mkString("\r\n\r\n")}")
     }
 
     q"..$transformed"

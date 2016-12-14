@@ -3,7 +3,7 @@
 package chiselTests
 
 import chisel3._
-import chisel3.experimental.{chiselName, blindName, dump}
+import chisel3.experimental.{chiselName, localName, dump}
 import org.scalatest._
 import org.scalatest.prop._
 import chisel3.testers.BasicTester
@@ -57,20 +57,20 @@ class NamedModule extends NamedModuleTester {
     myC +& 4.U  // named at enclosing scope
   }
 
-  // implicit blind naming for module methods
-  def BlindDefault(): UInt = {
-    val blindA = expectName(1.U + 2.U, "blindA")
-    val blindB = expectName(blindA + 3.U, "blindB")
-    blindB + 2.U  // named at enclosing scope
+  // implicit local naming for module methods
+  def LocalDefault(): UInt = {
+    val localA = expectName(1.U + 2.U, "localA")
+    val localB = expectName(localA + 3.U, "localB")
+    localB + 2.U  // named at enclosing scope
   }
 
   val test = expectName(FunctionMockup(), "test")
   val test2 = expectName(test +& 2.U, "test2")
-  val test3 = expectName(BlindDefault(), "test3")
+  val test3 = expectName(LocalDefault(), "test3")
 }
 
-class BlindNamedFunction extends NamedModuleTester {
-  @blindName
+class LocalNamedFunction extends NamedModuleTester {
+  @localName
   def myInnerFunction(): UInt = {
     def myInnerNested(): UInt = {
       // Should automatically recurse into inner scope
@@ -89,7 +89,7 @@ class BlindNamedFunction extends NamedModuleTester {
 
 @chiselName
 class NameCollisionModule extends NamedModuleTester {
-  // implicit blind naming for module methods
+  // implicit local naming for module methods
   def repeatedCalls(id: Int): UInt = {
     val test = expectName(1.U + 3.U, s"test_$id")  // should disambiguate by invocation order
     test + 2.U
@@ -142,10 +142,10 @@ class NamingAnnotationSpec extends ChiselPropSpec {
     assert(module.getNameFailures() == Nil)
   }
 
-  property("BlindNamedFunction should have names") {
+  property("LocalNamedFunction should have names") {
     // TODO: clean up test style
-    var module: BlindNamedFunction = null
-    elaborate { module = new BlindNamedFunction; module }
+    var module: LocalNamedFunction = null
+    elaborate { module = new LocalNamedFunction; module }
     assert(module.getNameFailures() == Nil)
   }
 
