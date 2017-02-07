@@ -27,33 +27,34 @@ object when {  // scalastyle:ignore object.name
     * }
     * }}}
     */
-  def apply(cond: Bool)(block: => Unit)(implicit sourceInfo: SourceInfo): WhenContext = {
-    new WhenContext(sourceInfo, cond, !cond, block)
+
+  def apply(cond: => Bool)(block: => Unit)(implicit sourceInfo: SourceInfo): WhenContext = {
+    new WhenContext(sourceInfo, Some(() => cond), block)
   }
 }
 
-/** Internal mechanism for generating a when. Because of the way FIRRTL
-  * commands are emitted, generating a FIRRTL elsewhen or nested whens inside
-  * elses would be difficult. Instead, this keeps track of the negative of the
-  * previous conditions, so when an elsewhen or otherwise is used, it checks
-  * that both the condition is true and all the previous conditions have been
-  * false.
-  */
-final class WhenContext(sourceInfo: SourceInfo, cond: Bool, prevCond: => Bool, block: => Unit) {
+final class WhenContext(sourceInfo: SourceInfo, cond: Option[() => Bool], block: => Unit, depth: Int = 0) {
   /** This block of logic gets executed if above conditions have been false
     * and this condition is true.
     */
-  def elsewhen (elseCond: Bool)(block: => Unit)(implicit sourceInfo: SourceInfo): WhenContext = {
-    new WhenContext(sourceInfo, prevCond && elseCond, prevCond && !elseCond, block)
+
+  def elsewhen (elseCond: => Bool)(block: => Unit)(implicit sourceInfo: SourceInfo): WhenContext = {
+    new WhenContext(sourceInfo, Some(() => elseCond), block, depth+1)
   }
 
   /** This block of logic gets executed only if the above conditions were all
     * false. No additional logic blocks may be appended past the `otherwise`.
     */
   def otherwise(block: => Unit)(implicit sourceInfo: SourceInfo): Unit =
-    new WhenContext(sourceInfo, prevCond, null, block)
+    new WhenContext(sourceInfo, None, block, depth+1)
 
-  pushCommand(WhenBegin(sourceInfo, cond.ref))
+  /* The lazy argument pattern allows c to be called here,
+   * emitting the declaration and assignment of the Bool node
+   * of the predicate in the correct place.
+   */
+  if (depth > 0) { pushCommand(AltBegin(sourceInfo)) }
+  cond.foreach( c => pushCommand(WhenBegin(sourceInfo, c().ref)) )
   block
-  pushCommand(WhenEnd(sourceInfo))
+  cond.foreach( c => pushCommand(WhenEnd(sourceInfo,depth)) )
+  if (cond.isEmpty) { pushCommand(OtherwiseEnd(sourceInfo,depth)) }
 }
