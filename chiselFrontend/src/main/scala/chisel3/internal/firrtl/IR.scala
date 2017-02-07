@@ -259,8 +259,10 @@ case class DefMemory(sourceInfo: SourceInfo, id: HasId, t: Data, size: Int) exte
 case class DefSeqMemory(sourceInfo: SourceInfo, id: HasId, t: Data, size: Int) extends Definition
 case class DefMemPort[T <: Data](sourceInfo: SourceInfo, id: T, source: Node, dir: MemPortDirection, index: Arg, clock: Arg) extends Definition
 case class DefInstance(sourceInfo: SourceInfo, id: Module, ports: Seq[Port]) extends Definition
-case class WhenBegin(sourceInfo: SourceInfo, pred: Arg) extends Command
-case class WhenEnd(sourceInfo: SourceInfo) extends Command
+case class WhenPredicate(sourceInfo: SourceInfo, pred: Arg) extends Command
+case class ElseBegin(sourceInfo: SourceInfo) extends Command
+case class BlockBegin(sourceInfo: SourceInfo) extends Command
+case class BlockEnd(sourceInfo: SourceInfo) extends Command
 case class Connect(sourceInfo: SourceInfo, loc: Node, exp: Arg) extends Command
 case class BulkConnect(sourceInfo: SourceInfo, loc1: Node, loc2: Node) extends Command
 case class ConnectInit(sourceInfo: SourceInfo, loc: Node, exp: Arg) extends Command

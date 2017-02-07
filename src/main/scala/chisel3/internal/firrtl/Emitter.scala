@@ -33,12 +33,18 @@ private class Emitter(circuit: Circuit) {
         printfArgs mkString ("printf(", ", ", ")")
       case e: DefInvalid => s"${e.arg.fullName(ctx)} is invalid"
       case e: DefInstance => s"inst ${e.name} of ${e.id.name}"
-      case w: WhenBegin =>
+      case w: WhenPredicate =>
         indent()
         s"when ${w.pred.fullName(ctx)} :"
-      case _: WhenEnd =>
+      case w: ElseBegin =>
+        indent()
+        s"else :"
+      case b: BlockBegin =>
+        indent()
+        s";"
+      case b: BlockEnd =>
         unindent()
-        s"skip"
+        s";"
     }
     firrtlLine + e.sourceInfo.makeMessage(" " + _)
   }
