@@ -37,8 +37,15 @@ private class Emitter(circuit: Circuit) {
       case w: WhenBegin =>
         indent()
         s"when ${w.pred.fullName(ctx)} :"
-      case _: WhenEnd =>
+      case w: WhenEnd =>
         unindent()
+        if (!w.hasAlt) { for (i <- 0 until w.depth) { unindent() } }
+        s"skip"
+      case a: AltBegin =>
+        indent()
+        s"else :"
+      case o: OtherwiseEnd =>
+        for (i <- 0 until o.depth) { unindent() }
         s"skip"
     }
     firrtlLine + e.sourceInfo.makeMessage(" " + _)
@@ -75,8 +82,9 @@ private class Emitter(circuit: Circuit) {
           // Firrtl extmodule can overrule name
           body ++= newline + s"defname = ${bb.id.desiredName}"
           body ++= newline + (bb.params map { case (n, p) => emitParam(n, p) } mkString newline)
-        case mod: DefModule => for (cmd <- mod.commands) {
-          body ++= newline + emit(cmd, mod)
+        case mod: DefModule => {
+          val procMod = mod.copy(commands = processWhens(mod.commands))
+          for (cmd <- procMod.commands) { body ++= newline + emit(cmd, procMod)}
         }
       }
       body ++= newline
@@ -94,6 +102,12 @@ private class Emitter(circuit: Circuit) {
     sb.append(moduleDecl(m))
     sb.append(moduleDefn(m))
     sb.result
+  }
+
+  private def processWhens(cmds: Seq[Command]): Seq[Command] = {
+    cmds.zip(cmds.tail).map({
+      case (a: WhenEnd, b: AltBegin) => a.copy(hasAlt = true)
+      case (a, b) => a }) ++ cmds.lastOption
   }
 
   private var indentLevel = 0
