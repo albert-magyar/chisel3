@@ -54,7 +54,9 @@ final class WhenContext(sourceInfo: SourceInfo, cond: Option[() => Bool], block:
    */
   if (depth > 0) { pushCommand(AltBegin(sourceInfo)) }
   cond.foreach( c => pushCommand(WhenBegin(sourceInfo, c().ref)) )
+  Builder.whenDepth += 1
   block
+  Builder.whenDepth -= 1
   cond.foreach( c => pushCommand(WhenEnd(sourceInfo,depth)) )
   if (cond.isEmpty) { pushCommand(OtherwiseEnd(sourceInfo,depth)) }
 }
